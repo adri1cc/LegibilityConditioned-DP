@@ -54,7 +54,7 @@ Diffusion Policy checkpoints are trained on a "nlegible" hdf5 file, containing d
 
 ## Inference
 
-<img src="media/inference_example.png" alt="drawing" width="100%"/>
+<img src="media/inference_example.png" alt="drawing" width="50%"/>
 
 Generate trajectories to reach a goal g* in a legible way, depending on an opposing goal g- :
 ```console
