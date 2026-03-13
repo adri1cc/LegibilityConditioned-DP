@@ -29,7 +29,8 @@ noise_pred_net = ControlConditionalUnet1D(
 )
 
 # load pretrained checkpoint
-ckpt_path = "output/ckpt/dp_25000.ckpt"
+# ckpt_path = "output/ckpt/dp_25000.ckpt"
+ckpt_path = "output/ckpt/f_dp_1.ckpt"
 if not os.path.isfile(ckpt_path):
     exit("Checkpoint file not found.")
     
@@ -44,8 +45,11 @@ encoder = SceneEncoder(
     obj_dim=7, num_objects=1
 ).to(device)
 
+# film_generator = FiLMGenerator(
+#     context_dim=64, feature_dims={1: 256, 2: 512, 3: 1024, 4: 1024, 5: 1024, 6:512, 7:256}
+# ).to(device)
 film_generator = FiLMGenerator(
-    context_dim=64, feature_dims={1: 256, 2: 512, 3: 1024, 4: 1024, 5: 1024, 6:512, 7:256}
+    context_dim=64, feature_dims={4: 1024}
 ).to(device)
 
 # load scene encoder checkpoint 
@@ -53,7 +57,7 @@ encoder.load_state_dict(torch.load('output/scene_encoder/se_20000_50e.pth'))
 encoder.eval()
 
 # load legibility MLP
-film_generator.load_state_dict(torch.load('output/mlp/legibility_100e.pt'))
+film_generator.load_state_dict(torch.load('output/mlp/f_legibility_500e_1.pt'))
 film_generator.eval()
 
 # initial Franka joints values
@@ -65,15 +69,15 @@ def simulate_trajectory(actions, initial_joint):
         joint_positions.append(a)
     return np.stack(joint_positions)
 
-with open("stats/stats_25000.pkl", "rb") as f:
+with open("stats/f_stats_1.pkl", "rb") as f:
     stats = pickle.load(f)
 
 # choose preicse goal positions or randomize them
 # note that in the training datasets z is fixed, with value 0.1
-goal_1 = random_main_goal()
-goal_2 = random_goal(goal_1)
-# goal_1 = np.array([0.5, -0.1, 0.1])
-# goal_2 = np.array([0.5, 0.1, 0.1])
+# goal_1 = random_main_goal()
+# goal_2 = random_goal(goal_1)
+goal_1 = np.array([0.5, -0.1, 0.1])
+goal_2 = np.array([0.5, 0.1, 0.1])
 
 traj_film, success_film = rollout_to_goal(
     initial_joint, goal_1, goal_2, ema_noise_pred_net, noise_scheduler, stats, encoder=encoder, film=film_generator, method="film")
@@ -89,7 +93,7 @@ if (success_without== True):
     ax.scatter(*goal_2, color='red', s=100, label='goal 2')
 
     if traj_film is not None:
-        ax.plot(traj_film[:, 0], traj_film[:, 1], traj_film[:, 2], color='blue', label='DP + Legibility')
+        ax.plot(traj_film[:, 0], traj_film[:, 1], traj_film[:, 2], color='green', label='DP + Legibility')
 
     if traj_without is not None:
         ax.plot(traj_without[:, 0], traj_without[:, 1], traj_without[:, 2], color='orange', label='Diffusion Policy')
@@ -102,6 +106,8 @@ if (success_without== True):
     ax.grid(True)
 
     plt.show()
+else:
+    print("No success.")
 
 with torch.no_grad():
     torch.cuda.empty_cache()

@@ -8,7 +8,7 @@ from torch.utils.data import Dataset
 import time
 
 from utils.architecture_utils import SceneEncoder, SceneDecoder
-from utils.dataset_utils import RandomSceneDataset
+from utils.dataset_utils import RandomTurtleSceneDataset
 
 device = torch.device('cuda')
 
@@ -24,8 +24,10 @@ def train_scene_autoencoder(encoder, decoder, dataloader, optimizer, device, num
 
         for batch in dataloader:
             nobs = batch['obs'].to(device).float()
-            goal_pos = nobs[:, -1, 7:10]
-            object_pos = nobs[:, -1, 10:13].unsqueeze(1)
+            # goal_pos = nobs[:, -1, 7:10]
+            # object_pos = nobs[:, -1, 10:13].unsqueeze(1)
+            goal_pos = nobs[:, -1, 3:6]
+            object_pos = nobs[:, -1, 6:9].unsqueeze(1)
 
             context = encoder(goal_pos, object_pos)
             x_recon = decoder(context)
@@ -70,7 +72,8 @@ decoder = SceneDecoder(
     obj_dim=7, num_objects=1
 ).to(device)
 
-dataset = RandomSceneDataset(size=20000)
+# dataset = RandomSceneDataset(size=20000)
+dataset = RandomTurtleSceneDataset(size=20000)
 
 # create dataloader
 dataloader = torch.utils.data.DataLoader(

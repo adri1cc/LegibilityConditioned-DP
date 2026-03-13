@@ -5,6 +5,7 @@ from typing import Union
 import math
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 class SinusoidalPosEmb(nn.Module):
     def __init__(self, dim):
@@ -104,6 +105,8 @@ class ConditionalResidualBlock1D(nn.Module):
         # Style Conditioning
         if control_cond is not None:
             gamma_ctrl, beta_ctrl = control_cond
+            gamma_ctrl = gamma_ctrl.unsqueeze(-1)
+            beta_ctrl = beta_ctrl.unsqueeze(-1)
             out = gamma_ctrl * out + beta_ctrl    
 
         out = self.blocks[1](out)
@@ -208,7 +211,7 @@ class ControlConditionalUnet1D(nn.Module):
             sample: torch.Tensor,
             timestep: Union[torch.Tensor, float, int],
             global_cond=None,
-            control_cond=None,
+            modulations=None,
             method=None):
         """
         x: (B,T,input_dim)
@@ -236,11 +239,18 @@ class ControlConditionalUnet1D(nn.Module):
         if global_cond is not None:
             global_feature = torch.cat([global_feature, global_cond], axis=-1)
 
-        layer = 0
+        layer = 1
         x = sample
         h = []
         for idx, (resnet, resnet2, downsample) in enumerate(self.down_modules):
-            cond = control_cond[layer] if control_cond is not None else None
+            if modulations is not None:
+                cond = modulations[layer] if layer in modulations else None
+            else:
+                cond = None
+            # if cond is not None:
+            #     print("Weird.")
+            # print(x.shape)
+            # print(global_feature.shape)
             x = resnet(x, global_feature, control_cond=cond)
             x = resnet2(x, global_feature, control_cond=cond)
             h.append(x)
@@ -248,12 +258,20 @@ class ControlConditionalUnet1D(nn.Module):
             layer +=1
 
         for mid_module in self.mid_modules:
-            cond = control_cond[layer] if control_cond is not None else None
+            if modulations is not None:
+                cond = modulations[layer] if layer in modulations else None
+            else:
+                cond = None
             x = mid_module(x, global_feature, control_cond=cond)
             layer +=1
 
         for idx, (resnet, resnet2, upsample) in enumerate(self.up_modules):
-            cond = control_cond[layer] if control_cond is not None else None
+            if modulations is not None:
+                cond = modulations[layer] if layer in modulations else None
+            else:
+                cond = None
+            # if cond is not None:
+            #     print("Weird.")
             x = torch.cat((x, h.pop()), dim=1)
             x = resnet(x, global_feature, control_cond=cond)
             x = resnet2(x, global_feature, control_cond=cond)
@@ -280,8 +298,9 @@ class FiLMGenerator(nn.Module):
         self.beta_fcs = nn.ModuleDict()
 
         for block_id, feat_dim in feature_dims.items():
-            self.gamma_fcs[str(block_id)] = nn.Linear(context_dim, feat_dim)
-            self.beta_fcs[str(block_id)] = nn.Linear(context_dim, feat_dim)
+            if feat_dim is not None:
+                self.gamma_fcs[str(block_id)] = nn.Linear(context_dim, feat_dim)
+                self.beta_fcs[str(block_id)] = nn.Linear(context_dim, feat_dim)
 
     def forward(self, context_vector):
         """
@@ -293,6 +312,35 @@ class FiLMGenerator(nn.Module):
         for block_id in self.gamma_fcs.keys():
             gamma = self.gamma_fcs[block_id](context_vector)
             beta = self.beta_fcs[block_id](context_vector)
+            modulations[int(block_id)] = (gamma, beta)
+        return modulations
+    
+class ConfigurableFiLMGenerator(nn.Module):
+    def __init__(self, context_dim, feature_dims, hidden_dim=512, num_layers=4):
+        super().__init__()
+        
+        # 1. MLP Backbone (Ablation Target)
+        layers = []
+        curr_dim = context_dim
+        for _ in range(num_layers - 1):
+            layers.append(nn.Linear(curr_dim, hidden_dim))
+            layers.append(nn.ReLU())
+            curr_dim = hidden_dim
+        self.backbone = nn.Sequential(*layers)
+
+        # 2. Output Heads
+        self.gamma_fcs = nn.ModuleDict()
+        self.beta_fcs = nn.ModuleDict()
+        for block_id, feat_dim in feature_dims.items():
+            self.gamma_fcs[str(block_id)] = nn.Linear(curr_dim, feat_dim)
+            self.beta_fcs[str(block_id)] = nn.Linear(curr_dim, feat_dim)
+
+    def forward(self, context_vector):
+        latent = self.backbone(context_vector)
+        modulations = {}
+        for block_id in self.gamma_fcs.keys():
+            gamma = self.gamma_fcs[block_id](latent)
+            beta = self.beta_fcs[block_id](latent)
             modulations[int(block_id)] = (gamma, beta)
         return modulations
     
@@ -323,6 +371,15 @@ class SceneEncoder(nn.Module):
         Returns:
         Tensor: Encoded context vector of shape (B, context_dim).
         """
+
+        # # Check goal_pos: if dim is 2, pad to 3
+        # if goal_pos.shape[-1] == 2:
+        #     goal_pos = F.pad(goal_pos, (0, 1), "constant", 0) # Pad last dim with one 0
+
+        # # Check object_positions: if dim is 2, pad to 3
+        # if object_positions.shape[-1] == 2:
+        #     object_positions = F.pad(object_positions, (0, 1), "constant", 0)
+
         B, N, D = object_positions.shape
         rel_vectors = object_positions - goal_pos.unsqueeze(1)  # (B, N, 3)
         dists = torch.norm(rel_vectors, dim=-1, keepdim=True)   # (B, N, 1)

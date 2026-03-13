@@ -24,7 +24,7 @@ def random_goal(exclude, min_dist=0.1, max_dist=0.8):
 
 def rollout_to_goal(
         initial_joint, goal_1, goal_2, ema_noise_pred_net, noise_scheduler, stats, 
-        encoder=None, film=None, method=None, max_steps=200, num_diffusion_iters=100, device=torch.device('cuda')
+        encoder=None, film=None, method=None, max_steps=20, num_diffusion_iters=100, device=torch.device('cuda')
         ):
 
     pred_horizon = 16
@@ -32,8 +32,8 @@ def rollout_to_goal(
     action_horizon = 8
     action_dim = 7
 
-    goal_tensor = torch.tensor([goal_1], dtype=torch.float32, device=device)
-    obj_tensor = torch.tensor([[goal_2]], dtype=torch.float32, device=device)
+    goal_tensor = torch.as_tensor(goal_1, dtype=torch.float32, device=device).unsqueeze(0)
+    obj_tensor = torch.as_tensor([goal_2], dtype=torch.float32, device=device).unsqueeze(0)
 
     if film is not None and encoder is not None:
 
@@ -41,13 +41,9 @@ def rollout_to_goal(
 
             context_vector = encoder(goal_tensor, obj_tensor)
             modulations = film(context_vector)
-            control_cond = []
-            for i in range(1, 8):
-                gamma, beta = modulations[i]
-                control_cond.append([gamma.unsqueeze(-1), beta.unsqueeze(-1)])
 
     else:
-        control_cond = None
+        modulations = None
 
     success = False
 
@@ -70,13 +66,13 @@ def rollout_to_goal(
             naction = torch.randn((1, pred_horizon, action_dim), device=device)
             noise_scheduler.set_timesteps(num_diffusion_iters)
 
-            if step*8<15:
+            if step*8<40:
                 for k in noise_scheduler.timesteps:
                     noise_pred = ema_noise_pred_net(
                         sample=naction,
                         timestep=k,
                         global_cond=obs_cond,
-                        control_cond=control_cond,
+                        modulations=modulations,
                         method=method
                     )
                     naction = noise_scheduler.step(model_output=noise_pred, timestep=k, sample=naction).prev_sample
@@ -101,6 +97,7 @@ def rollout_to_goal(
             trajectory.append(robot_pose)
 
             dist_to_goal = np.linalg.norm(robot_pose - goal_1[:3])
+            # print(dist_to_goal)
             # Success criteria for evaluation
             if dist_to_goal < 0.035:
 
